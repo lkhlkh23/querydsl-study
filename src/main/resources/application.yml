@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:querydsl
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create # drop, create
+    properties:
+      hibernate:
+        # show_sql: true # SQL Query 출력을 로그를 통해서만 확인하기 위해 주석처리
+        format_sql: true
+logging.level:
+  org.hibernate.SQL: debug # Hibernate Query 출력
+  # org.hibernate.type: trace # Query에 binding 되는 파라미터 확인 (방법1)

@@ -3,7 +3,11 @@ package syudy.querydsl.entity;
 import com.querydsl.core.NonUniqueResultException;
 import com.querydsl.core.QueryResults;
 import com.querydsl.core.Tuple;
+import com.querydsl.core.types.dsl.CaseBuilder;
+import com.querydsl.core.types.dsl.Expressions;
+import com.querydsl.jpa.JPAExpressions;
 import com.querydsl.jpa.impl.JPAQueryFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,13 +16,17 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
 
 import javax.persistence.EntityManager;
+import javax.persistence.EntityManagerFactory;
 
 import java.util.List;
 
+import static org.assertj.core.api.AssertionsForClassTypes.filter;
+import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
 @Transactional
+@Slf4j
 class MemberTest {
 
     @Autowired
@@ -197,5 +205,216 @@ class MemberTest {
                                         .fetch();
 
         assertEquals(32, tuples.get(0).get(member.age.avg()));
+    }
+
+    @Test
+    @DisplayName("Member, Team 조인 조회, Team A 소속된 모든 팀원 출력 (연관관계 O)")
+    void test_select_07_join_01() {
+        final QMember member = QMember.member;
+        final QTeam team = QTeam.team;
+        /* Querydsl은 JPQL의 Builder 이다! */
+        final List<Member> members = query.select(member)
+                                          .from(member)
+                                          .join(member.team, team)
+                                          .where(member.team.name.eq("Team-A"))
+                                          .fetch();
+        assertEquals(2, members.size());
+        assertThat(members).extracting("username").containsExactly("DOBY", "RED");
+    }
+
+    @Test
+    @DisplayName("Member, Team 조인 조회, 팀원 전원 출력 ")
+    void test_select_08_join_01() {
+        /*
+            ON 의 역할
+                - 연관관계가 없는 엔티티간의 조인 (제일 많이 사용)
+                - 조인대상 필터링
+            join == inner join : 대상이 되는 값만 출력
+                - on 으로 조건을 설정하는 것과 where 조건을 설정하는 것이 실제로 동일하게 동작
+            left join : 왼쪽 기준으로 출력
+                - 예를들어, member join team on member.team.name.eq("A") 이면 모든 회원을 출력하지만, A가 아닌 사람은 null 출력
+        */
+        final QMember member = QMember.member;
+        final QTeam team = QTeam.team;
+        /* Querydsl은 JPQL의 Builder 이다! */
+        final List<Tuple> members = query.select(member, team)
+                                         .from(member)
+                                         .leftJoin(member.team, team)
+                                         .on(member.team.name.eq("Team-A"))
+                                         .fetch();
+        assertEquals(5, members.size());
+        for (Tuple tuple : members) {
+            log.info("member : {}", tuple.toString());
+        }
+    }
+
+    @Test
+    @DisplayName("연관관계가 없는 엔티티간의 조인, 회원의 이름과 팀 이름이 같은 대상 출력 ")
+    void test_select_08_join_02() {
+        em.persist(new Member("Team-A"));
+        em.persist(new Member("Team-B"));
+        em.persist(new Member("Team-C"));
+
+        final QMember member = QMember.member;
+        final QTeam team = QTeam.team;
+        /* 연관관계가 있고 없고는, join() 에서의 문법이 다르다! */
+        final List<Tuple> members = query.select(member, team)
+                                         .from(member)
+                                         .innerJoin(team)
+                                         .on(member.username.eq(team.name))
+                                         .fetch();
+        assertEquals(2, members.size());
+        for (Tuple tuple : members) {
+            log.info("member : {}", tuple.toString());
+        }
+    }
+
+    @Autowired
+    private EntityManagerFactory emf;
+
+    @Test
+    @DisplayName("지연로딩이지만 Member,Team SQL 한번에 조회")
+    void test_select_09_fetchjoin_01() {
+        /* fetch join은 SQL 조인을 활용해서 엔티티를 한번에 조회하는 기능. 주로 최적화에서 많이 사용되는 기능 */
+
+        final QMember member = QMember.member;
+        final QTeam team = QTeam.team;
+
+        final Member findMember = query.selectFrom(member)
+                                       .where(member.username.eq("DOBY"))
+                                       .fetchOne();
+        /* 지연로딩이자만 하나의 SQL에서 전체 다 조회 */
+        log.info("Member : {}", findMember.toString());
+
+        /* 로딩유무를 확인 (getTeam) */
+        final boolean loaded = emf.getPersistenceUnitUtil().isLoaded(findMember.getTeam());
+        assertFalse(loaded);
+    }
+
+    @Test
+    @DisplayName("지연로딩으로 Member,Team SQL 각각 실행")
+    void test_select_09_fetchjoin_02() {
+        /* fetch join은 SQL 조인을 활용해서 엔티티를 한번에 조회하는 기능. 주로 최적화에서 많이 사용되는 기능 */
+
+        final QMember member = QMember.member;
+        final QTeam team = QTeam.team;
+        final Member findMember = query.selectFrom(member)
+                                       .join(member.team, team)
+                                       .fetchJoin()
+                                       .where(member.username.eq("DOBY"))
+                                       .fetchFirst();
+
+        final boolean loaded = emf.getPersistenceUnitUtil().isLoaded(findMember.getTeam());
+        assertTrue(loaded);
+    }
+
+    @Test
+    @DisplayName("회원의 나이를 20대, 30대로 구분")
+    void test_select_10_case_01() {
+        final QMember member = QMember.member;
+        final String memAge = query.select(member.age
+                .when(20).then("20대")
+                .when(30).then("30대")
+                .otherwise("노인")
+
+        ).from(member)
+                .orderBy(member.age.desc())
+                .fetchFirst();
+        assertEquals("30대", memAge);
+    }
+
+    @Test
+    @DisplayName("회원의 나이를 20대, 30대로 구분")
+    void test_select_10_case_02() {
+        /* case 를 사용해서 복잡한 쿼리를 하기보다는, 단지 데이터를 조회하고, domain 에서 처리하는 것이 좋다고 생각! */
+        final QMember member = QMember.member;
+        final String memAge = query.select(
+                                        new CaseBuilder().when(member.age.between(20, 30)).then("20대")
+                                                         .otherwise("30대")
+                                    ).from(member)
+                                   .orderBy(member.age.desc())
+                                   .fetchFirst();
+        assertEquals("30대", memAge);
+    }
+
+    @Test
+    @DisplayName("상수 출력")
+    void test_select_11_constant_01() {
+        final QMember member = QMember.member;
+        final Tuple tuple = query.select(member.username, Expressions.constant("A"))
+                .from(member)
+                .where(member.username.eq("DOBY"))
+                .fetchFirst();
+        log.info("Tuple : {}", tuple.toString());
+    }
+
+    @Test
+    @DisplayName("문자열 붙이기")
+    void test_select_12_conncat_01() {
+        final QMember member = QMember.member;
+        /* age는 정수형이기 때문에 문자열 처리가 필요, 그리고 Enum을 사용할때 많이 사용 */
+        final String result = query.select(member.username.concat("_").concat(member.age.stringValue()))
+                                   .from(member)
+                                   .where(member.username.eq("DOBY"))
+                                   .fetchFirst();
+        assertEquals("DOBY_31", result);
+    }
+
+    @Test
+    @DisplayName("나이가 가장 많은 회원을 조회")
+    void test_select_13_subquery_01() {
+        final QMember member = QMember.member;
+        final QMember memberSub = QMember.member;
+
+        final Member findMember = query.selectFrom(member)
+                                       .where(member.age.eq(
+                                               JPAExpressions
+                                                       .select(memberSub.age.max())
+                                                       .from(memberSub)
+                                       )).fetchOne();
+        assertEquals(findMember.getAge(), 33);
+    }
+
+    @Test
+    @DisplayName("나이가 평균 이상인 회원 조회")
+    void test_select_13_subquery_02() {
+        final QMember member = QMember.member;
+        final QMember memberSub = QMember.member;
+
+        final List<Member> members = query.selectFrom(member)
+                .where(member.age.goe(
+                        JPAExpressions
+                                .select(memberSub.age.avg())
+                                .from(memberSub)
+                )).fetch();
+        assertEquals(3, members.size());
+    }
+
+    @Test
+    @DisplayName("도비와 회원들 최대 나이 출력")
+    void test_select_13_subquery_03() {
+        final QMember member = QMember.member;
+        final QMember memberSub = QMember.member;
+
+        final Tuple tuple = query.select(member.username, JPAExpressions.select(memberSub.age.max()).from(memberSub))
+                                 .from(member)
+                                 .where(member.username.eq("DOBY"))
+                                 .fetchFirst();
+        assertEquals(33, tuple.get(1, Integer.class));
+        assertEquals("DOBY", tuple.get(0, String.class));
+
+        /*
+            JPA JPQL 서브쿼리의 한계점으로 from 절의 서브쿼리(인라인 뷰)는 지원하지 않는다.
+            당연히 Querydsl도 지원하지 않는다. 왜냐하면, Querydsl은 JPQL 빌더이기 때문이다.
+            하이버네이트 구현체를 사용하면 select 절의 서브쿼리는 지원한다.
+            Querydsl도 하이버네이트 구현체를 사용하면 select 절의 서브쿼리를 지원한다.
+
+            from 절의 서브쿼리 해결방안
+                1. 서브쿼리를 join으로 변경한다. (가능한 상황도 있고, 불가능한 상황도 있다.)
+                2. 애플리케이션에서 쿼리를 2번 분리해서 실행한다.
+                3. nativeSQL을 사용한다.
+
+            from 절 내부에 서브쿼리가 과연 단지 데이터를 조회하는 것이 아닌, 비즈니스 로직이 있지 않을까? 라는 의문을 한번씩 가져보자!
+        */
     }
 }

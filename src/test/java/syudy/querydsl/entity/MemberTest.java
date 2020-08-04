@@ -1,8 +1,13 @@
 package syudy.querydsl.entity;
 
+import com.querydsl.core.BooleanBuilder;
 import com.querydsl.core.NonUniqueResultException;
 import com.querydsl.core.QueryResults;
 import com.querydsl.core.Tuple;
+import com.querydsl.core.types.ExpressionUtils;
+import com.querydsl.core.types.Predicate;
+import com.querydsl.core.types.Projections;
+import com.querydsl.core.types.dsl.BooleanExpression;
 import com.querydsl.core.types.dsl.CaseBuilder;
 import com.querydsl.core.types.dsl.Expressions;
 import com.querydsl.jpa.JPAExpressions;
@@ -13,7 +18,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.Commit;
 import org.springframework.transaction.annotation.Transactional;
+import syudy.querydsl.dto.MemberDto;
+import syudy.querydsl.dto.QMemberDto;
+import syudy.querydsl.dto.UserDto;
 
 import javax.persistence.EntityManager;
 import javax.persistence.EntityManagerFactory;
@@ -21,6 +30,7 @@ import javax.persistence.EntityManagerFactory;
 import java.util.List;
 
 import static org.assertj.core.api.AssertionsForClassTypes.filter;
+import static org.assertj.core.api.AssertionsForClassTypes.setMaxLengthForSingleLineDescription;
 import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -416,5 +426,284 @@ class MemberTest {
 
             from 절 내부에 서브쿼리가 과연 단지 데이터를 조회하는 것이 아닌, 비즈니스 로직이 있지 않을까? 라는 의문을 한번씩 가져보자!
         */
+    }
+
+    @Test
+    @DisplayName("DTO를 이용한 데이터 조회 - setter 방식")
+    void test_select_14_projection_01() {
+        /*
+            Tuple은 Querydsl 에서 제공하는 클래스이기 때문에 repository, domain layer 까지만 사용하는 것을 권장
+            또한, Querydsl이 아닌, 다른 방식으로 변경을 했을 경우에도 편리함
+            그렇기 때문에 Tuple 사용하기보다는 DTO를 활용 권장
+        */
+        /*
+            NoArgsConstructor + setter 필요 (getter 불필요), 반드시 엔티티 필드명과 DTO 필드명이 동일해야 setter로 넣을 수 있음
+        */
+        final QMember member = QMember.member;
+        final MemberDto findMember = query
+                                        .select(Projections.bean(MemberDto.class, member.username, member.age))
+                                        .from(member)
+                                        .where(member.username.eq("DOBY"))
+                                        .fetchOne();
+        assertEquals(31, findMember.getAge());
+    }
+
+    @Test
+    @DisplayName("DTO를 이용한 데이터 조회 - 필드접근 방식")
+    void test_select_14_projection_02() {
+        /*
+            Getter, Setter 불필요, 필드에 넣는 방식, 반드시 엔티티 필드명과 DTO 필드명이 동일해야 field에 넣을 수 있음
+        */
+        final QMember member = QMember.member;
+        final MemberDto findMember = query
+                                        .select(Projections.fields(MemberDto.class, member.username, member.age))
+                                        .from(member)
+                                        .where(member.username.eq("DOBY"))
+                                        .fetchOne();
+        assertEquals(31, findMember.getAge());
+    }
+
+    @Test
+    @DisplayName("DTO를 이용한 데이터 조회 - 생성자 방식")
+    void test_select_14_projection_03() {
+        final QMember member = QMember.member;
+        /*
+            field이 타입이 동일해야 가능 나이가 "11" 이면 안됨!
+            타입이 맞지 않으면 intellij에서 오류 발생 (컴파일)
+        */
+        final MemberDto findMember = query
+                                        .select(Projections.constructor(MemberDto.class, member.username, member.age))
+                                        .from(member)
+                                        .where(member.username.eq("DOBY"))
+                                        .fetchOne();
+        assertEquals(31, findMember.getAge());
+    }
+
+    @Test
+    @DisplayName("DTO를 이용한 데이터 조회 - alias - 필드")
+    void test_select_14_projection_04() {
+        final QMember member = QMember.member;
+        /*
+            DTO와 Entity의 필드명이 다를 경우 alias 부여
+        */
+        final UserDto findUser = query
+                                    .select(Projections.fields(UserDto.class, member.username.as("name"), member.age))
+                                    .from(member)
+                                    .where(member.username.eq("DOBY"))
+                                    .fetchOne();
+        assertEquals(31, findUser.getAge());
+        assertEquals("DOBY", findUser.getName());
+    }
+
+    @Test
+    @DisplayName("DTO를 이용한 데이터 조회 - alias - 서브쿼리")
+    void test_select_14_projection_05() {
+        final QMember member = QMember.member;
+        final QMember memberForSub = new QMember("sub");
+        /*
+            DTO와 Entity의 필드명이 다를 경우 alias 부여
+        */
+        final List<UserDto> users = query
+                                        .select(Projections.fields(UserDto.class, member.username.as("name"),
+                                                ExpressionUtils.as(JPAExpressions
+                                                                    .select(memberForSub.age)
+                                                                    .from(memberForSub)
+                                                                    .where(member.username.eq(memberForSub.username)), "age")))
+                                        .from(member)
+                                        .fetch();
+        for (UserDto user : users) {
+            log.info(" --> User : {}", user.toString());
+        }
+    }
+
+    @Test
+    @DisplayName("@QueryProjection를 이용한 데이터 조회")
+    void test_select_14_projection_06() {
+        final QMember member = QMember.member;
+
+        /*
+            QueryProejction을 사용하면 DTO도 QClass를 생성 (생성자 타입과 유사하게 타입이 중요)
+                - 장점 : QueryProjection은 생성자가 실제로 존재하기 때문에 생성자 타입과 달리 컴파일로 확인 가능
+                - 단점 :
+                    - 필드가 많을 경우에는 불편함
+                    - DTO를 QClass로 만들어야 하는 불편함
+                    - DTO가 Querydsl에 대한 의존성이 발생
+                        - 갑자기 Querydsl을 사용하지 않을 경우, DTO도 수정해야하는 의존성에 대한 문제
+                        - DTO가 여러 계층에서 사용할 수 있는데, Querydsl과 혼종이 되어서 순수한 DTO라고 할 수 없음
+        */
+
+        final List<MemberDto> members = query
+                                            .select(new QMemberDto(member.username, member.age))
+                                            .from(member)
+                                            .fetch();
+        for (MemberDto memberDto : members) {
+            log.info(" --> MemberDto : {}", memberDto.toString());
+        }
+    }
+
+    @Test
+    @DisplayName("BooleanBuilder를 이용한 where 조건 조회")
+    void test_select_15_booleanBuilder_01() {
+        final QMember member = QMember.member;
+        final String searchName = "";
+        final Integer searchAge = 31;
+
+        final BooleanBuilder builder = new BooleanBuilder();
+        if(!searchName.equals("")) {
+            builder.and(member.username.eq(searchName));
+        }
+        if(searchAge != null) {
+            builder.and(member.age.eq(searchAge));
+        }
+
+        final MemberDto memberDto  = query
+                                        .select(new QMemberDto(member.username, member.age))
+                                        .from(member)
+                                        .where(builder)
+                                        .fetchFirst();
+        assertEquals("DOBY", memberDto.getUsername());
+        assertEquals(31, memberDto.getAge());
+    }
+
+    @Test
+    @DisplayName("Where 다중 파라미터를 이용한 조회")
+    void test_select_16_multiparam_01() {
+        final QMember member = QMember.member;
+        final String searchName = "";
+        final Integer searchAge = 31;
+
+        /*
+            장점
+                1. 쿼리가 간결
+                2. 메소드를 통해서 해당 조건이 어떤 역핧을 수행하는지 알 수 있음 (직관적)
+        */
+
+        final MemberDto memberDto  = query
+                .select(new QMemberDto(member.username, member.age))
+                .from(member)
+                .where(
+                        /* where 에 null 이 있으면 null 은 무시 */
+                        usernameEq(member, searchName), ageEq(member, searchAge)
+                )
+                .fetchFirst();
+        assertEquals("DOBY", memberDto.getUsername());
+        assertEquals(31, memberDto.getAge());
+    }
+
+    @Test
+    @DisplayName("Where 다중 파라미터를 이용한 조회")
+    void test_select_16_multiparam_02() {
+        final QMember member = QMember.member;
+        final String searchName = "";
+        final Integer searchAge = 31;
+
+        /*
+            장점
+                1. 쿼리가 간결
+                2. 메소드를 통해서 해당 조건이 어떤 역핧을 수행하는지 알 수 있음 (직관적)
+                3. 조립이 가능
+                4. 재사용의 기대성이 좋음
+        */
+
+        final MemberDto memberDto  = query
+                .select(new QMemberDto(member.username, member.age))
+                .from(member)
+                .where(
+                        /* where 에 null 이 있으면 null 은 무시 */
+                        allEq(member, searchName, searchAge)
+                )
+                .fetchFirst();
+        assertEquals("DOBY", memberDto.getUsername());
+        assertEquals(31, memberDto.getAge());
+    }
+
+    private Predicate ageEq(QMember member, Integer searchAge) {
+        return searchAge == null ? null : member.age.eq(searchAge);
+    }
+
+    private Predicate usernameEq(QMember member, String searchName) {
+        return searchName == null ? null : member.username.endsWith(searchName);
+    }
+
+    private BooleanExpression ageEqByExpression(QMember member, Integer searchAge) {
+        return searchAge == null ? null : member.age.eq(searchAge);
+    }
+
+    private BooleanExpression nameEqByExpression(QMember member, String searchName) {
+        return searchName == null ? null : member.username.endsWith(searchName);
+    }
+
+    private BooleanExpression allEq(QMember member, String searchName, Integer searchAge) {
+        return nameEqByExpression(member, searchName).and(ageEqByExpression(member, searchAge));
+    }
+
+
+    @Test
+    @DisplayName("BULK Delete")
+    void test_dml_01_bulk_delete_01() {
+        final QMember member = QMember.member;
+        long count = query.delete(member)
+                          .where(member.age.goe(31))
+                          .execute();
+        final List<Member> members = query.selectFrom(member).fetch();
+        assertEquals(3, members.size());
+    }
+
+    @Test
+    @Commit
+    @DisplayName("BULK Update")
+    void test_dml_01_bulk_update_02() {
+        /*
+            JPA는 변경감지를 통해 변경된 부분에 대해 데이터 변경 --> 건건이 데이터를 삽입
+                --> 문제 : BULK가 아니라.. DB 호출 건수가 너무 많음 --> Bulk 연산 필요
+
+            Bulk 연산 주의성
+                - 양속성 컨텍스트를 거치지 않고 디비에 바로 삽입하기 때문에 영속성 컨텍스트와 실제 디비의 데이터가 다름
+                - select를 했을 경우, 영속성 컨텍스트의 key값과 디비에서 가져온 key값이 동일할 때, 영속성 컨텍스트의 데이터를 최우선으로 하기 때문에
+                  디비에서 조회한 값이 bulk update 적용되지 앟는 영속성 컨텍스트의 값이 나오는 문제 발생
+        */
+        final QMember member = QMember.member;
+        final List<Member> beforeMembers = query.selectFrom(member).fetch();
+        for (Member findMember : beforeMembers) {
+            log.info(" --> Before Member : {}", findMember.toString());
+        }
+
+        long count = query.update(member)
+                          .set(member.username, "20대")
+                          .where(member.age.lt(30))
+                          .execute();
+        /* 그렇기 때문에 영속성 컨텍스트 초기화를 위한 flush, clear 반드시 필요 */
+        em.flush();
+        em.clear();
+        final List<Member> afterMembers = query.selectFrom(member).fetch();
+        for (Member findMember : afterMembers) {
+            log.info(" --> After Member : {}", findMember.toString());
+        }
+    }
+
+    @Test
+    @Commit
+    @DisplayName("BULK Update")
+    void test_dml_01_bulk_update_03() {
+        final QMember member = QMember.member;
+        long count = query.update(member)
+                .set(member.age, member.age.add(100))
+                .execute();
+        em.flush();
+        em.clear();
+
+        final List<Member> afterMembers = query.selectFrom(member).fetch();
+        for (Member findMember : afterMembers) {
+            log.info(" --> After Member : {}", findMember.toString());
+        }
+    }
+
+    @Test
+    @DisplayName("SQL function 호출하기")
+    void test_sqlFunction_01() {
+        final QMember member = QMember.member;
+        String dobyName =  query.select(Expressions.stringTemplate("function('replace', {0}, {1}, {2})", member.username, "member", "M"))
+                            .from(member).where(member.username.eq("DOBY")).fetchFirst();
+        assertEquals("DOBY", dobyName);
     }
 }

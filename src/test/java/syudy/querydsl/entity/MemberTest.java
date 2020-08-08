@@ -26,11 +26,8 @@ import syudy.querydsl.dto.UserDto;
 
 import javax.persistence.EntityManager;
 import javax.persistence.EntityManagerFactory;
-
 import java.util.List;
 
-import static org.assertj.core.api.AssertionsForClassTypes.filter;
-import static org.assertj.core.api.AssertionsForClassTypes.setMaxLengthForSingleLineDescription;
 import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
